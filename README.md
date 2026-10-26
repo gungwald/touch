@@ -89,6 +89,11 @@ of the week using a table of years. The table in ProDOS 2.0.3 ends in the
 the current years. `prodos-2.4.3-boot.dsk` is a ProDOS 2.0.3 boot disk
 with PRODOS and BASIC.SYSTEM replaced by the 2.4.3 versions.
 
+## How it was made
+
+This program was vibe coded with
+[Claude Code](https://claude.com/claude-code).
+
 ## License
 
 touch is free software, licensed under the GNU General Public License
