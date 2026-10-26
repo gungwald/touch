@@ -17,11 +17,34 @@ set, a partial pathname refers to BASIC.SYSTEM's default drive, as it does
 for BASIC.SYSTEM's own commands. Pressing RETURN on an empty line exits.
 MLI errors are reported by number and name, e.g. `ERROR $44 PATH NOT FOUND`.
 
+### Without a clock
+
+If ProDOS has no date, because there is no clock card and no date has
+been set, touch asks for one:
+
+```
+]-TOUCH
+FILE TO TOUCH:SAMPLE
+NO DATE IS SET. ENTER TODAY'S DATE AS
+DD-MON-YY OR DD-MON-YY HH:MM
+DATE:29-FEB-24 13:45
+TOUCHED SAMPLE 29-FEB-24 13:45
+```
+
+The time is optional; without it the time is set to 00:00. Dates that
+don't exist, such as 31-APR-26 or 29-FEB-25, get `INVALID DATE` and the
+question again. An empty line cancels and changes nothing.
+
+The date is set in ProDOS as well as on the file. ProDOS uses it until
+the computer is restarted: later touches use it without asking, and so
+do files created or saved from BASIC.SYSTEM. With no clock it does not
+advance, so update it by hand if the day changes.
+
 ## How it works
 
 1. `GET_TIME` ($82) reads the clock into DATE/TIME at $BF90-$BF93. If they
-   are still zero there is no clock, and touch stops without changing
-   anything.
+   are still zero there is no clock, and touch asks for the date and
+   writes it there itself.
 2. `GET_FILE_INFO` ($C4) reads the file's access, type and aux type
    (`CREATE` ($C0) first if the file is not found).
 3. `SET_FILE_INFO` ($C3) writes them back with the new modification
@@ -48,14 +71,15 @@ make test
 ```
 
 boots `touch.dsk` in LinApple with `linapple.conf`. That config puts
-LinApple's ThunderClock compatible clock card in slot 4. Without a clock
-card, ProDOS has no date or time.
+LinApple's ThunderClock compatible clock card in slot 4. To try touch
+without a clock, change `Slot 4 = Clock Card` to `Slot 4 = None`.
 
 `test/run-test.sh` runs the tests automatically. It backdates `SAMPLE` to
 1990, then boots LinApple on a virtual X display (Xvfb). It types a
 series of touch commands with xdotool and saves screenshots to `test/out`.
 It lists the modification dates read from the disk image before and
-after (using `test/prodos_dates.py`).
+after (using `test/prodos_dates.py`). It then runs again with the clock
+card removed, to test entering the date.
 
 ### Why ProDOS 2.4.3
 

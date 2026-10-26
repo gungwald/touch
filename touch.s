@@ -16,7 +16,16 @@
 ;
 ; The current date and time come from the ProDOS GET_TIME call, which
 ; reads the clock card (if any) into the global page. If there is no
-; clock and no date has been set, touch reports that and changes nothing.
+; clock and no date has been set, touch asks for one:
+;
+;     NO DATE IS SET. ENTER TODAY'S DATE AS
+;     DD-MON-YY OR DD-MON-YY HH:MM
+;     DATE:26-OCT-26 14:05
+;     TOUCHED MYFILE 26-OCT-26 14:05
+;
+; The date goes into the ProDOS global page, so ProDOS uses it from then
+; on, and then onto the file. Without a time, the time is set to 00:00.
+; An empty line cancels, changing nothing.
 ;
 
         .setcpu "6502"
@@ -64,16 +73,9 @@ CR              = $0D
         .segment "CODE"
 
 start:
-        ; Ask for the pathname
-        PRINT   msg_prompt
-        lda     PROMPT
-        pha
-        lda     #':' | $80
-        sta     PROMPT
-        jsr     GETLN
-        pla
-        sta     PROMPT
-
+        lda     #<msg_prompt    ; ask for the pathname
+        ldy     #>msg_prompt
+        jsr     input
         jsr     parse_path
         bcc     @parsed
         PRINT   msg_too_long
@@ -91,8 +93,9 @@ start:
         lda     DATE
         ora     DATE+1
         bne     @get_info
-        PRINT   msg_no_clock
-        rts
+        jsr     ask_date        ; no clock and no date: ask for one
+        bcc     @get_info
+        rts                     ; cancelled
 
 @get_info:
         jsr     resolve_path
@@ -175,19 +178,228 @@ get_info:
         .word   info_parms
         rts
 
+; Print the prompt at A (lo), Y (hi) and read a line into INBUF with
+; GETLN, which shows ':' as its own prompt character
+input:
+        jsr     print
+        lda     PROMPT
+        pha
+        lda     #':' | $80
+        sta     PROMPT
+        jsr     GETLN
+        pla
+        sta     PROMPT
+        rts
+
+; Ask for the date until a valid one is entered, and put it in DATE and
+; TIME on the global page, where ProDOS uses it from then on.
+; Returns carry set if the user cancels with an empty line.
+ask_date:
+        PRINT   msg_no_date
+@ask:   lda     #<msg_date
+        ldy     #>msg_date
+        jsr     input
+        ldx     #0
+        jsr     skip_spaces
+        cmp     #CR
+        bne     @parse
+        sec                     ; empty line
+        rts
+@parse: jsr     parse_date
+        bcc     @set
+        PRINT   msg_bad_date
+        jmp     @ask
+
+@set:   lda     month           ; lo = MMMDDDDD
+        and     #7
+        asl     a
+        asl     a
+        asl     a
+        asl     a
+        asl     a
+        ora     day
+        sta     DATE
+        lda     month           ; hi = YYYYYYYM
+        lsr     a
+        lsr     a
+        lsr     a
+        sta     PTR
+        lda     year
+        asl     a
+        ora     PTR
+        sta     DATE+1
+        lda     minute
+        sta     TIME
+        lda     hour
+        sta     TIME+1
+        clc
+        rts
+
+; Parse "DD-MON-YY" or "DD-MON-YY HH:MM" from INBUF,X into day, month,
+; year, hour and minute. Returns carry set if it is not a valid date.
+parse_date:
+        lda     #0              ; time defaults to 00:00
+        sta     hour
+        sta     minute
+        jsr     parse_num
+        bcs     @bad
+        sta     day
+        lda     #'-'
+        jsr     expect
+        bcs     @bad
+        jsr     parse_month
+        bcs     @bad
+        lda     #'-'
+        jsr     expect
+        bcs     @bad
+        jsr     parse_num
+        bcs     @bad
+        sta     year
+        jsr     skip_spaces
+        cmp     #CR
+        beq     @check
+
+        jsr     parse_num
+        bcs     @bad
+        cmp     #24
+        bcs     @bad
+        sta     hour
+        lda     #':'
+        jsr     expect
+        bcs     @bad
+        jsr     parse_num
+        bcs     @bad
+        cmp     #60
+        bcs     @bad
+        sta     minute
+        jsr     skip_spaces
+        cmp     #CR
+        bne     @bad
+
+@check: lda     day             ; the day must exist in the month
+        beq     @bad
+        ldy     month
+        cmp     days_in_month-1,y
+        beq     @ok
+        bcc     @ok
+        cpy     #2              ; but February has 29 in a leap year
+        bne     @bad
+        cmp     #29
+        bne     @bad
+        lda     year
+        and     #3
+        bne     @bad
+@ok:    clc
+        rts
+@bad:   sec
+        rts
+
+; Parse a three letter month name from INBUF,X into month (1-12).
+; Returns carry set if it is not one.
+parse_month:
+        ldy     #0
+@read:  lda     INBUF,x
+        and     #$7F
+        cmp     #'a'
+        bcc     @store
+        and     #$DF            ; to uppercase
+@store: sta     month_buf,y
+        inx
+        iny
+        cpy     #3
+        bne     @read
+
+        stx     pos
+        ldx     #0              ; offset into month_names
+        ldy     #1              ; month number
+@try:   lda     month_names,x
+        cmp     month_buf
+        bne     @next
+        lda     month_names+1,x
+        cmp     month_buf+1
+        bne     @next
+        lda     month_names+2,x
+        cmp     month_buf+2
+        beq     @found
+@next:  inx
+        inx
+        inx
+        iny
+        cpy     #13
+        bne     @try
+        ldx     pos
+        sec
+        rts
+@found: sty     month
+        ldx     pos
+        clc
+        rts
+
+; Parse a one or two digit number from INBUF,X. Returns it in A with
+; carry clear, or carry set if there is no digit.
+parse_num:
+        jsr     get_digit
+        bcs     @rts
+        sta     num
+        jsr     get_digit
+        bcs     @one
+        sta     PTR             ; second digit
+        lda     num             ; num * 10 + digit
+        asl     a
+        asl     a
+        adc     num             ; carry is clear: the values are small
+        asl     a
+        adc     PTR
+        sta     num
+@one:   lda     num
+        clc
+@rts:   rts
+
+; If INBUF,X is a digit, return its value in A with carry clear and
+; advance X. Otherwise return carry set.
+get_digit:
+        lda     INBUF,x
+        and     #$7F
+        sec
+        sbc     #'0'
+        cmp     #10
+        bcs     @rts
+        inx
+@rts:   rts
+
+; If INBUF,X is the character in A, advance X and return carry clear.
+; Otherwise return carry set.
+expect:
+        sta     PTR
+        lda     INBUF,x
+        and     #$7F
+        cmp     PTR
+        bne     @no
+        inx
+        clc
+        rts
+@no:    sec
+        rts
+
+; Advance X past spaces in INBUF. Returns the next character in A
+; without its high bit.
+skip_spaces:
+        lda     INBUF,x
+        and     #$7F
+        cmp     #' '
+        bne     @done
+        inx
+        bne     skip_spaces
+@done:  rts
+
 ; Copy the line GETLN left in INBUF into path as a length-prefixed
 ; ProDOS pathname. Leading spaces are skipped, the name ends at the
 ; first space or RETURN, and lowercase is folded to uppercase.
 ; Returns carry set if the name is too long.
 parse_path:
         ldx     #0
-@skip:  lda     INBUF,x
-        and     #$7F
-        cmp     #' '
-        bne     @start
-        inx
-        bne     @skip
-@start: ldy     #0
+        jsr     skip_spaces
+        ldy     #0
 @copy:  lda     INBUF,x
         and     #$7F
         cmp     #CR
@@ -416,11 +628,17 @@ verb:   .word   msg_touched
 month_names:
         .byte   "JANFEBMARAPRMAYJUNJULAUGSEPOCTNOVDEC???"
 
+days_in_month:
+        .byte   31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
+
 msg_prompt:     .byte   "FILE TO TOUCH", 0
 msg_touched:    .byte   "TOUCHED ", 0
 msg_created:    .byte   "CREATED ", 0
 msg_too_long:   .byte   "PATHNAME TOO LONG", CR, 0
-msg_no_clock:   .byte   "NO CLOCK: DATE AND TIME NOT SET", CR, 0
+msg_no_date:    .byte   "NO DATE IS SET. ENTER TODAY'S DATE AS", CR
+                .byte   "DD-MON-YY OR DD-MON-YY HH:MM", CR, 0
+msg_date:       .byte   "DATE", 0
+msg_bad_date:   .byte   "INVALID DATE", CR, 0
 msg_error:      .byte   "ERROR $", 0
 
 err_codes:
@@ -442,6 +660,18 @@ e48:    .byte   "DISK FULL", 0
 e49:    .byte   "DIRECTORY FULL", 0
 e4E:    .byte   "FILE LOCKED", 0
 e52:    .byte   "NOT A PRODOS DISK", 0
+
+; The date being entered
+day:    .res    1
+month:  .res    1
+year:   .res    1
+hour:   .res    1
+minute: .res    1
+month_buf:
+        .res    3
+
+num:    .res    1               ; parse_num's result
+pos:    .res    1               ; saved input position
 
 ; Length-prefixed pathnames: as typed, and as given to the MLI
 path:   .res    MAXPATH+1

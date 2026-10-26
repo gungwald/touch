@@ -4,6 +4,9 @@
 # of touch commands as a user would, and save screenshots of the results.
 # The directory dates on the disk are listed before and after.
 #
+# It runs twice: with the clock card from linapple.conf, and with the
+# clock card removed, where touch asks for the date.
+#
 # Usage: test/run-test.sh [DISK]      (default: touch.dsk)
 #
 # Needs Xvfb, xdotool, ImageMagick (import), and linapple.
@@ -12,18 +15,12 @@ set -e
 cd "$(dirname "$0")/.."
 DISK=${1:-touch.dsk}
 OUT=test/out
-WORK=$OUT/work.dsk
 DATES=test/prodos_dates.py
 DISPLAY_NUM=:99
 
 mkdir -p $OUT
-rm -f $OUT/*.png
-cp "$DISK" $WORK
-
-# Give SAMPLE an old date so the change is obvious
-$DATES $WORK SAMPLE 1990-01-02 03:04
-echo "== Before"
-$DATES $WORK
+rm -f $OUT/*.png $OUT/*.dsk
+sed 's/^Slot 4 = Clock Card/Slot 4 = None/' linapple.conf > $OUT/noclock.conf
 
 if ! xdpyinfo -display $DISPLAY_NUM >/dev/null 2>&1; then
     Xvfb $DISPLAY_NUM -screen 0 1024x768x24 >/dev/null 2>&1 &
@@ -32,19 +29,37 @@ if ! xdpyinfo -display $DISPLAY_NUM >/dev/null 2>&1; then
 fi
 export DISPLAY=$DISPLAY_NUM
 
-SDL_VIDEODRIVER=x11 SDL_AUDIODRIVER=dummy \
-    linapple -c linapple.conf --autoboot --d1 $WORK >$OUT/linapple.log 2>&1 &
-LINAPPLE_PID=$!
+stop() {
+    [ -n "$LINAPPLE_PID" ] && kill $LINAPPLE_PID 2>/dev/null || true
+    [ -n "$LINAPPLE_PID" ] && wait $LINAPPLE_PID 2>/dev/null || true
+    LINAPPLE_PID=
+}
 cleanup() {
-    kill $LINAPPLE_PID 2>/dev/null || true
-    wait $LINAPPLE_PID 2>/dev/null || true
+    stop
     [ -n "$XVFB_PID" ] && kill $XVFB_PID 2>/dev/null || true
 }
 trap cleanup EXIT
 
-sleep 10                                    # boot to the BASIC prompt
-xdotool windowfocus "$(xdotool search --name 'Emulator' | head -1)"
-sleep 0.5
+# Copy the disk, give SAMPLE an old date so the change is obvious, and
+# boot it with the config file given
+boot() {
+    WORK=$OUT/$1.dsk
+    cp "$DISK" $WORK
+    $DATES $WORK SAMPLE 1990-01-02 03:04
+    echo "== $1: before"
+    $DATES $WORK
+    SDL_VIDEODRIVER=x11 SDL_AUDIODRIVER=dummy \
+        linapple -c $2 --autoboot --d1 $WORK >$OUT/$1.log 2>&1 &
+    LINAPPLE_PID=$!
+    sleep 10                                # boot to the BASIC prompt
+    xdotool windowfocus "$(xdotool search --name 'Emulator' | head -1)"
+    sleep 0.5
+}
+finish() {
+    stop
+    echo "== $1: after"
+    $DATES $OUT/$1.dsk
+}
 
 # Type a line and press RETURN
 line() {
@@ -62,6 +77,7 @@ shot() {
     echo "screenshot: $OUT/$1.png"
 }
 
+boot clock linapple.conf
 line "HOME" 1
 touch SAMPLE                    # partial pathname with no prefix set
 touch newfile                   # does not exist: created; lowercase folded
@@ -71,12 +87,37 @@ touch ""                        # empty line: does nothing
 line "PREFIX /BOOT"
 touch NEWFILE                   # partial pathname with the prefix set
 shot 1-touch
-
 line "HOME" 1
 line "CATALOG"
 shot 2-catalog
+finish clock
 
-cleanup
-trap - EXIT
-echo "== After"
-$DATES $WORK
+boot noclock $OUT/noclock.conf
+line "HOME" 1
+touch SAMPLE                    # asks for the date
+line ""                         # empty line: cancels
+touch SAMPLE
+line "32-JAN-26"                # no such day
+line "29-FEB-25"                # not a leap year
+line "15-XYZ-26"                # no such month
+line "15-OCT-26 24:00"          # no such hour
+line "15-OCT-26 12:60"          # no such minute
+line "15-OCT-26 12:3X"          # junk after the time
+shot 3-noclock-invalid
+line "29-feb-24 13:45"          # valid, in lowercase
+touch NEWFILE                   # the date is set now: no question
+touch SAMPLE
+line "PRINT PEEK(49040);\",\";PEEK(49041);\",\";PEEK(49042);\",\";PEEK(49043)"
+shot 4-noclock-set
+line "HOME" 1
+line "CATALOG"
+shot 5-noclock-catalog
+finish noclock
+
+# A date without a time: the time becomes 00:00
+boot notime $OUT/noclock.conf
+line "HOME" 1
+touch SAMPLE
+line "1-JAN-00"
+shot 6-notime
+finish notime
