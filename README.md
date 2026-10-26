@@ -64,3 +64,12 @@ of the week using a table of years. The table in ProDOS 2.0.3 ends in the
 1990s (October 26, 2026 comes out as 1998). ProDOS 2.4.3's table covers
 the current years. `prodos-2.4.3-boot.dsk` is a ProDOS 2.0.3 boot disk
 with PRODOS and BASIC.SYSTEM replaced by the 2.4.3 versions.
+
+## License
+
+touch is free software, licensed under the GNU General Public License
+version 3. See [LICENSE](LICENSE).
+
+The included third-party files, `AppleCommander-ac-1.4.0.jar` and the
+ProDOS system files on `prodos-2.4.3-boot.dsk`, come under their own
+terms.
