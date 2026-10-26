@@ -1,0 +1,6 @@
+touch
+*.o
+*.lst
+*.map
+touch.dsk
+test/out/
