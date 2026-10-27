@@ -53,6 +53,25 @@ the computer is restarted: later touches use it without asking, and so
 do files created or saved from BASIC.SYSTEM. With no clock it does not
 advance, so update it by hand if the day changes.
 
+### Files with no creation date
+
+After touching a file, touch checks whether it has a creation date. If
+it has none, touch asks what to do:
+
+```
+]-TOUCH
+FILE TO TOUCH:SAMPLE
+TOUCHED SAMPLE 27-OCT-26 01:54
+NO CREATION DATE. SET IT TO (N)OW, TO
+A DATE YOU (E)NTER, OR (I)GNORE IT? N
+CREATION DATE SET TO 27-OCT-26 01:54
+```
+
+- **N** sets it to the date and time just put on the file.
+- **E** asks for a date in the same form as above (`DD-MON-YY` or
+  `DD-MON-YY HH:MM`). An empty line leaves the file alone.
+- **I** leaves the file alone.
+
 ## How it works
 
 1. `GET_TIME` ($82) reads the clock into DATE/TIME at $BF90-$BF93. If they
@@ -63,6 +82,16 @@ advance, so update it by hand if the day changes.
 3. `SET_FILE_INFO` ($C3) writes them back with the new modification
    date and time. Both calls share one parameter block, since their
    layouts line up.
+4. If `GET_FILE_INFO` reported no creation date, touch sets one itself,
+   since `SET_FILE_INFO` can't. It reads directory blocks with
+   `READ_BLOCK` ($80), starting at the volume directory in block 2 of
+   the device ProDOS just used (`DEVNUM`, $BF30). It goes down through
+   each subdirectory in the pathname and changes the four creation-date
+   bytes in the file's entry. Then it writes the block back with
+   `WRITE_BLOCK` ($81). Before writing, it checks that every directory's
+   name matches the pathname and that the entry still has no creation
+   date. If anything doesn't match, it reports
+   `CAN'T FIND THE DIRECTORY ENTRY` and writes nothing.
 
 ## Building
 
@@ -96,7 +125,9 @@ series of touch commands with xdotool and saves screenshots to `test/out`.
 It lists the modification dates read from the disk image before and
 after (using `test/prodos_dates.py`). It then runs again with the clock
 card removed, to test entering the date, and once more to test line
-editing in 40 and 80 columns.
+editing in 40 and 80 columns. Last, it tests setting creation dates. For
+that it builds a disk with files in the volume directory's second block
+and in subdirectories, and clears their creation dates.
 
 ### Why ProDOS 2.4.3
 

@@ -27,14 +27,28 @@
 ; on, and then onto the file. Without a time, the time is set to 00:00.
 ; An empty line cancels, changing nothing.
 ;
+;
+; Then, if the file has no creation date, touch offers to set one:
+;
+;     NO CREATION DATE. SET IT TO (N)OW, TO
+;     A DATE YOU (E)NTER, OR (I)GNORE IT? N
+;     CREATION DATE SET TO 26-OCT-26 14:05
+;
+; ProDOS 8 has no call that sets a creation date, so touch reads the
+; file's directory entry with READ_BLOCK, changes it, and writes it back
+; with WRITE_BLOCK.
+;
 
         .setcpu "6502"
 
 ; ProDOS MLI and global page
 MLI             = $BF00
+DEVNUM          = $BF30         ; last device used
 DATE            = $BF90         ; date: lo = MMMDDDDD, hi = YYYYYYYM
 TIME            = $BF92         ; time: lo = minute, hi = hour
 
+READ_BLOCK_CMD  = $80
+WRITE_BLOCK_CMD = $81
 GET_TIME_CMD    = $82
 CREATE_CMD      = $C0
 SET_INFO_CMD    = $C3
@@ -44,6 +58,14 @@ GET_PREFIX_CMD  = $C7
 
 ERR_INVALID_PATH   = $40
 ERR_FILE_NOT_FOUND = $46
+
+; ProDOS directory blocks
+ENTRY_LEN       = $27           ; bytes in a directory entry
+PER_BLOCK       = $0D           ; entries in a directory block
+H_ENTRY_LEN     = $1F           ; header: entry length, then per block
+E_KEY           = $11           ; entry: key block
+E_CREATE        = $18           ; entry: creation date and time
+ST_SUBDIR       = $D0           ; storage type of a subdirectory
 
 ; BASIC.SYSTEM global page
 DEFSLT          = $BE3C         ; default slot
@@ -59,6 +81,7 @@ COUT            = $FDED
 
 ; Zero page
 PTR             = $06           ; free for user programs
+ENTRY           = $08           ; directory entry in block_buf
 
 MAXPATH         = 64            ; longest ProDOS pathname
 MAXLINE         = 239           ; longest line get_line accepts
@@ -132,6 +155,7 @@ start:
         ldx     #3
 @copy:  lda     DATE,x
         sta     info_mod_date,x
+        sta     stamp,x
         dex
         bpl     @copy
 
@@ -141,6 +165,8 @@ start:
         .byte   SET_INFO_CMD
         .word   info_parms
         bcs     error
+        lda     DEVNUM          ; the device the file is on
+        sta     rw_unit
 
         ; Report what was done: "TOUCHED PATH DD-MON-YY HH:MM"
         lda     verb
@@ -150,7 +176,13 @@ start:
         lda     #' ' | $80
         jsr     COUT
         jsr     print_timestamp
-        jmp     CROUT
+        jsr     CROUT
+
+        lda     info_create_date
+        ora     info_create_date+1
+        bne     @done
+        jmp     fix_create      ; the file has no creation date
+@done:  rts
 
 ; Print "ERROR $xx" and a description for the MLI error code in A
 error:
@@ -308,6 +340,21 @@ get_line:
 ; Returns carry set if the user cancels with an empty line.
 ask_date:
         PRINT   msg_no_date
+        jsr     read_date
+        bcs     @rts
+        ldx     #3
+@copy:  lda     stamp,x
+        sta     DATE,x
+        dex
+        bpl     @copy
+        clc
+@rts:   rts
+
+; Show the date format and ask for a date until a valid one is entered.
+; Put it in stamp in ProDOS's form: date (lo, hi), minute, hour.
+; Returns carry set if the user cancels with an empty line.
+read_date:
+        PRINT   msg_date_format
 @ask:   lda     #<msg_date
         ldy     #>msg_date
         jsr     input
@@ -330,7 +377,7 @@ ask_date:
         asl     a
         asl     a
         ora     day
-        sta     DATE
+        sta     stamp
         lda     month           ; hi = YYYYYYYM
         lsr     a
         lsr     a
@@ -339,11 +386,11 @@ ask_date:
         lda     year
         asl     a
         ora     PTR
-        sta     DATE+1
+        sta     stamp+1
         lda     minute
-        sta     TIME
+        sta     stamp+2
         lda     hour
-        sta     TIME+1
+        sta     stamp+3
         clc
         rts
 
@@ -605,6 +652,266 @@ resolve_path:
         clc
         rts
 
+; The file has no creation date. Ask whether to set it to now, to a date
+; the user enters, or to leave it alone.
+fix_create:
+        PRINT   msg_no_create
+@key:   jsr     RDKEY
+        cmp     #'a' | $80
+        bcc     @upper
+        and     #$DF            ; to uppercase
+@upper: cmp     #'N' | $80
+        beq     @now
+        cmp     #'E' | $80
+        beq     @enter
+        cmp     #'I' | $80
+        beq     @ignore
+        lda     #KEY_BELL
+        jsr     COUT
+        jmp     @key
+
+@ignore:
+        jsr     COUT
+        jmp     CROUT
+
+@now:   jsr     COUT            ; the date and time the file was touched
+        jsr     CROUT           ; with are still in stamp
+        jmp     set_create
+
+@enter: jsr     COUT
+        jsr     CROUT
+        PRINT   msg_enter_create
+        jsr     read_date
+        bcc     set_create
+        rts                     ; empty line: leave it alone
+
+; Write the date and time in stamp into the file's creation date.
+; ProDOS 8 has no call that sets a creation date, so this finds the
+; file's entry in its directory and writes the directory block back.
+set_create:
+        jsr     make_abspath
+        bcs     @error
+        jsr     find_entry
+        bcc     @found
+        cmp     #0
+        beq     @not_found
+@error: jmp     error
+
+@found: ldy     #E_CREATE       ; make sure the entry still has no
+        lda     (ENTRY),y       ; creation date before changing it
+        iny
+        ora     (ENTRY),y
+        bne     @not_found
+        ldy     #E_CREATE
+        ldx     #0
+@put:   lda     stamp,x
+        sta     (ENTRY),y
+        iny
+        inx
+        cpx     #4
+        bne     @put
+        jsr     MLI
+        .byte   WRITE_BLOCK_CMD
+        .word   rw_parms
+        bcs     @error
+        PRINT   msg_create_set
+        jsr     print_timestamp
+        jmp     CROUT
+
+@not_found:
+        PRINT   msg_no_entry
+        rts
+
+; Put the full pathname of the file in abspath, adding the prefix in
+; front of a partial pathname, and a slash after the last name to mark
+; the end. Returns carry set and A = error code on failure.
+make_abspath:
+        lda     fullpath+1
+        cmp     #'/'
+        beq     @full
+        jsr     MLI             ; abspath = prefix + fullpath
+        .byte   GET_PREFIX_CMD
+        .word   abs_prefix_parms
+        bcs     @rts
+        ldx     abspath
+        ldy     #0
+@add:   cpy     fullpath
+        beq     @end
+        lda     fullpath+1,y
+        sta     abspath+1,x
+        inx
+        iny
+        bne     @add
+@end:   stx     abspath
+        bcs     @mark           ; carry is set by cpy when equal
+
+@full:  ldx     fullpath
+@copy:  lda     fullpath,x
+        sta     abspath,x
+        dex
+        bpl     @copy
+        ldx     abspath
+@mark:  lda     #'/'
+        sta     abspath+1,x
+        clc
+@rts:   rts
+
+; Find the directory entry for abspath on the unit in rw_unit, reading
+; directory blocks with READ_BLOCK from the volume directory down. The
+; name in each directory's header must match the path too.
+; Returns carry clear with the entry's block in block_buf, its number
+; in rw_block, and ENTRY pointing at the entry. Otherwise returns carry
+; set and A = the MLI error code, or 0 if the entry was not found.
+find_entry:
+        lda     #2              ; the volume directory starts at block 2
+        sta     rw_block
+        lda     #0
+        sta     rw_block+1
+        lda     #2              ; first name, after the leading slash
+        sta     path_pos
+        jsr     next_name       ; the volume name
+        bcc     @dir
+        lda     #0              ; not found
+        rts
+
+@dir:   jsr     MLI             ; read the first block of a directory
+        .byte   READ_BLOCK_CMD
+        .word   rw_parms
+        bcs     @rts
+        lda     #0
+        sta     entry_idx
+        jsr     point_entry     ; its header
+        ldy     #H_ENTRY_LEN    ; only standard directories
+        lda     (ENTRY),y
+        cmp     #ENTRY_LEN
+        bne     @not_found
+        iny
+        lda     (ENTRY),y
+        cmp     #PER_BLOCK
+        bne     @not_found
+        jsr     match_name      ; the header names the same directory
+        bne     @not_found
+        jsr     next_name       ; the name to look for in it
+        bcs     @not_found
+
+        inc     entry_idx       ; skip the header
+@entry: lda     entry_idx
+        cmp     #PER_BLOCK
+        bcs     @next_block
+        jsr     point_entry
+        jsr     match_name
+        beq     @found
+        inc     entry_idx
+        bne     @entry
+
+@next_block:
+        lda     block_buf+2     ; follow the link to the next block
+        sta     rw_block
+        lda     block_buf+3
+        sta     rw_block+1
+        ora     rw_block
+        beq     @not_found      ; that was the last one
+        jsr     MLI
+        .byte   READ_BLOCK_CMD
+        .word   rw_parms
+        bcs     @rts
+        lda     #0
+        sta     entry_idx
+        beq     @entry          ; always taken
+
+@found: lda     abspath
+        cmp     path_pos
+        bcc     @done           ; the last name: this is the file
+        ldy     #0              ; otherwise it is a directory to go into
+        lda     (ENTRY),y
+        and     #$F0
+        cmp     #ST_SUBDIR
+        bne     @not_found
+        ldy     #E_KEY
+        lda     (ENTRY),y
+        sta     rw_block
+        iny
+        lda     (ENTRY),y
+        sta     rw_block+1
+        jmp     @dir
+
+@done:  clc
+        rts
+@not_found:
+        lda     #0
+        sec
+@rts:   rts
+
+; Set name_start and name_len to the next name in abspath, starting at
+; path_pos, and move path_pos past it and the slash after it.
+; Returns carry set if there are no more names.
+next_name:
+        ldx     path_pos
+        lda     abspath
+        cmp     path_pos
+        bcc     @none           ; past the end
+        stx     name_start
+@scan:  lda     abspath,x
+        cmp     #'/'
+        beq     @end
+        inx
+        bne     @scan
+@end:   txa
+        sec
+        sbc     name_start
+        sta     name_len
+        inx
+        stx     path_pos
+        clc
+        rts
+@none:  sec
+        rts
+
+; Compare the name in the directory entry at ENTRY with the name at
+; name_start in abspath. Returns Z set if they match. Deleted entries
+; never match.
+match_name:
+        ldy     #0
+        lda     (ENTRY),y
+        cmp     #$10
+        bcc     @no             ; storage type 0: deleted
+        and     #$0F            ; name length
+        cmp     name_len
+        bne     @no
+        tax
+        beq     @no
+        stx     name_left
+        ldx     name_start
+        ldy     #1
+@cmp:   lda     abspath,x
+        cmp     (ENTRY),y
+        bne     @no
+        inx
+        iny
+        dec     name_left
+        bne     @cmp
+        rts                     ; Z is set
+@no:    lda     #1              ; Z clear
+        rts
+
+; Point ENTRY at entry number entry_idx in block_buf
+point_entry:
+        lda     #<(block_buf+4)
+        sta     ENTRY
+        lda     #>(block_buf+4)
+        sta     ENTRY+1
+        ldx     entry_idx
+        beq     @rts
+@add:   clc
+        lda     ENTRY
+        adc     #ENTRY_LEN
+        sta     ENTRY
+        bcc     @next
+        inc     ENTRY+1
+@next:  dex
+        bne     @add
+@rts:   rts
+
 ; Print the length-prefixed pathname in path
 print_path:
         ldx     #0
@@ -617,17 +924,18 @@ print_path:
         bne     @loop
 @done:  rts
 
-; Print DATE and TIME in the style of CATALOG: DD-MON-YY HH:MM
+; Print the date and time in stamp in the style of CATALOG:
+; DD-MON-YY HH:MM
 print_timestamp:
-        lda     DATE            ; day
+        lda     stamp           ; day
         and     #$1F
         jsr     print_dec2
         lda     #'-' | $80
         jsr     COUT
 
-        lda     DATE+1          ; month is bit 0 of hi and bits 7-5 of lo
+        lda     stamp+1         ; month is bit 0 of hi and bits 7-5 of lo
         lsr     a
-        lda     DATE
+        lda     stamp
         ror     a
         lsr     a
         lsr     a
@@ -653,17 +961,17 @@ print_timestamp:
         lda     #'-' | $80
         jsr     COUT
 
-        lda     DATE+1          ; year, 0-99
+        lda     stamp+1         ; year, 0-99
         lsr     a
         jsr     print_dec2
         lda     #' ' | $80
         jsr     COUT
 
-        lda     TIME+1          ; hour
+        lda     stamp+3         ; hour
         jsr     print_dec2
         lda     #':' | $80
         jsr     COUT
-        lda     TIME            ; minute
+        lda     stamp+2         ; minute
         ; fall through
 
 ; Print A (0-99) as two decimal digits
@@ -710,6 +1018,7 @@ info_parms:
 info_mod_date:
         .word   0               ; modification date
         .word   0               ; modification time
+info_create_date:
         .word   0               ; creation date
         .word   0               ; creation time
 
@@ -726,6 +1035,18 @@ create_parms:
 prefix_parms:
         .byte   1               ; parameter count
         .word   fullpath        ; buffer
+
+abs_prefix_parms:
+        .byte   1               ; parameter count
+        .word   abspath         ; buffer
+
+rw_parms:                       ; READ_BLOCK and WRITE_BLOCK
+        .byte   3               ; parameter count
+rw_unit:
+        .byte   0               ; unit number
+        .word   block_buf       ; buffer
+rw_block:
+        .word   0               ; block number
 
 online_parms:
         .byte   2               ; parameter count
@@ -747,8 +1068,15 @@ msg_prompt:     .byte   "FILE TO TOUCH", 0
 msg_touched:    .byte   "TOUCHED ", 0
 msg_created:    .byte   "CREATED ", 0
 msg_too_long:   .byte   "PATHNAME TOO LONG", CR, 0
-msg_no_date:    .byte   "NO DATE IS SET. ENTER TODAY'S DATE AS", CR
+msg_no_date:    .byte   "NO DATE IS SET. ENTER TODAY'S DATE AS", CR, 0
+msg_enter_create:
+                .byte   "ENTER THE CREATION DATE AS", CR, 0
+msg_date_format:
                 .byte   "DD-MON-YY OR DD-MON-YY HH:MM", CR, 0
+msg_no_create:  .byte   "NO CREATION DATE. SET IT TO (N)OW, TO", CR
+                .byte   "A DATE YOU (E)NTER, OR (I)GNORE IT? ", 0
+msg_create_set: .byte   "CREATION DATE SET TO ", 0
+msg_no_entry:   .byte   "CAN'T FIND THE DIRECTORY ENTRY", CR, 0
 msg_date:       .byte   "DATE", 0
 msg_bad_date:   .byte   "INVALID DATE", CR, 0
 msg_error:      .byte   "ERROR $", 0
@@ -773,6 +1101,13 @@ e49:    .byte   "DIRECTORY FULL", 0
 e4E:    .byte   "FILE LOCKED", 0
 e52:    .byte   "NOT A PRODOS DISK", 0
 
+; Variables. They are set before they are used, so they take no room in
+; the file.
+        .segment "BSS"
+
+; A date and time in ProDOS's form: date (lo, hi), minute, hour
+stamp:  .res    4
+
 ; The date being entered
 day:    .res    1
 month:  .res    1
@@ -791,3 +1126,19 @@ pos:    .res    1               ; saved input position
 path:   .res    MAXPATH+1
 fullpath:
         .res    MAXPATH+1
+
+; Finding a directory entry
+abspath:                        ; full pathname: prefix + partial path,
+        .res    2*MAXPATH+2     ; and a slash after the end
+path_pos:
+        .res    1               ; where the next name starts in abspath
+name_start:
+        .res    1               ; the current name in abspath
+name_len:
+        .res    1
+name_left:
+        .res    1               ; characters left to compare
+entry_idx:
+        .res    1               ; entry number in block_buf
+block_buf:
+        .res    512

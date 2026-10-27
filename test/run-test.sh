@@ -40,12 +40,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Copy the disk, give SAMPLE an old date so the change is obvious, and
-# boot it with the config file given
+# Copy the disk (or the one given third), give SAMPLE an old date so the
+# change is obvious, and boot it with the config file given
 boot() {
     WORK=$OUT/$1.dsk
-    cp "$DISK" $WORK
-    $DATES $WORK SAMPLE 1990-01-02 03:04
+    cp "${3:-$DISK}" $WORK
+    $DATES $WORK SAMPLE mod 1990-01-02 03:04
     echo "== $1: before"
     $DATES $WORK
     SDL_VIDEODRIVER=x11 SDL_AUDIODRIVER=dummy \
@@ -84,6 +84,10 @@ keys() {
     else
         sleep 1
     fi
+}
+# Wait for a disk write to finish before typing more
+wait_disk() {
+    sleep 3
 }
 # Run touch on a pathname
 touch() {
@@ -178,6 +182,62 @@ text "EIGHTXY"                  # creates EIGHTY
 keys Left Delete Right Return
 shot 9-80col
 finish editing
+
+# Creation dates. ProDOS 8 has no call to set one, so touch writes the
+# directory entry itself. Make files that fill the volume directory's
+# first block, so A1-A3 are in its second, and files in subdirectories.
+SETUP=$OUT/setup-src.dsk
+cp "$DISK" $SETUP
+for f in F1 F2 F3 F4 F5 F6 F7 A1 A2 A3; do
+    printf '' | java -jar AppleCommander-ac-1.4.0.jar -p $SETUP $f TXT
+done
+boot create-setup linapple.conf $SETUP
+line "CREATE SUB"
+line "CREATE SUB/DEEP"
+touch SUB/INNER
+touch SUB/DEEP/FILE
+touch SUB/DEEP/FILE2
+finish create-setup
+# Then clear their creation dates
+for f in SAMPLE A1 A2 A3 SUB/INNER SUB/DEEP/FILE SUB/DEEP/FILE2; do
+    $DATES $OUT/create-setup.dsk $f create none
+done
+
+boot create linapple.conf $OUT/create-setup.dsk
+line "HOME" 1
+touch SAMPLE
+keys n                          # now, in lowercase
+wait_disk
+touch A1                        # in the second directory block
+keys x e                        # x is not a choice: just a beep
+line "31-JUN-85"                # no such day
+line "15-JUL-85 09:30"
+wait_disk
+touch A2
+keys I                          # ignore
+touch A3
+keys E
+line ""                         # empty line: ignore
+shot 10-create
+line "HOME" 1
+touch SUB/INNER                 # in a subdirectory
+keys N
+wait_disk
+touch /BOOT/SUB/DEEP/FILE       # two levels down, full pathname
+keys E
+line "4-JUL-76"
+wait_disk
+line "PREFIX /BOOT/SUB"         # TOUCH is not in /BOOT/SUB, so give its
+line "-/BOOT/TOUCH"             # full pathname
+line "DEEP/FILE2"               # partial pathname with a prefix
+keys N
+wait_disk
+line "-/BOOT/TOUCH"
+line "DEEP/FILE"                # has a creation date now: no question
+shot 11-create-subdirs
+finish create
+echo "== create: AppleCommander can still read the disk"
+java -jar AppleCommander-ac-1.4.0.jar -ll $OUT/create.dsk | grep "ProDOS format"
 
 # A date without a time: the time becomes 00:00
 boot notime $OUT/noclock.conf
