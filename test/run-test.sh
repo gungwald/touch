@@ -67,6 +67,24 @@ line() {
     xdotool key Return
     sleep "${2:-3}"
 }
+# Type text without pressing RETURN
+text() {
+    xdotool type --delay 90 -- "$1"
+}
+# Press keys by X key name, e.g. Delete, Left, Right, ctrl+x, Return.
+# Each key is released at once: LinApple runs fast while the disk is
+# busy, so a key held even briefly then auto-repeats.
+keys() {
+    for k in "$@"; do
+        xdotool key "$k"
+        sleep 0.15
+    done
+    if [ "${@: -1}" = Return ]; then
+        sleep 3                 # let touch finish before typing more
+    else
+        sleep 1
+    fi
+}
 # Run touch on a pathname
 touch() {
     line "-TOUCH"
@@ -104,7 +122,9 @@ line "15-OCT-26 24:00"          # no such hour
 line "15-OCT-26 12:60"          # no such minute
 line "15-OCT-26 12:3X"          # junk after the time
 shot 3-noclock-invalid
-line "29-feb-24 13:45"          # valid, in lowercase
+text "29-feb-24 13:4X"          # valid, in lowercase, once the X is
+keys Delete                     # deleted
+line "5"
 touch NEWFILE                   # the date is set now: no question
 touch SAMPLE
 line "PRINT PEEK(49040);\",\";PEEK(49041);\",\";PEEK(49042);\",\";PEEK(49043)"
@@ -113,6 +133,51 @@ line "HOME" 1
 line "CATALOG"
 shot 5-noclock-catalog
 finish noclock
+
+# Line editing with Delete and the arrow keys. In LinApple the host's
+# Delete key is the Apple Delete key; Backspace is the left arrow.
+boot editing linapple.conf
+line "HOME" 1
+line "-TOUCH"
+text "SAMPLX"                   # Delete at the end of the line
+keys Delete
+line "E"
+line "-TOUCH"
+text "SAMXPLE"                  # Delete in the middle closes up the gap
+keys Left Left Left Delete Right Right Right Return
+line "-TOUCH"
+text "NEWFILEXYZ"               # RETURN drops what is right of the cursor
+keys Left Left Left Return
+line "-TOUCH"
+text "JUNK"                     # Ctrl-X cancels the line
+keys ctrl+x
+line "SAMPLE"
+line "-TOUCH"
+keys Delete Left Up Down        # nothing to delete or move over; up and
+text "SAM"                      # down arrows are ignored
+keys Up Down
+line "PLE"
+shot 7-editing
+
+line "HOME" 1
+line "-TOUCH"
+text "SAMPLE$(printf 'Z%.0s' {1..30})"  # wraps onto the next line
+shot 8-wrap-before
+keys $(printf 'Delete %.0s' {1..30})    # delete back across the wrap
+shot 8-wrap-deleted
+keys Return
+shot 8-wrap-after
+
+line "PR#3"                     # the same in 80 columns
+line "HOME" 1
+line "-TOUCH"
+text "SAMXPLE"
+keys Left Left Left Delete Right Right Right Return
+line "-TOUCH"
+text "EIGHTXY"                  # creates EIGHTY
+keys Left Delete Right Return
+shot 9-80col
+finish editing
 
 # A date without a time: the time becomes 00:00
 boot notime $OUT/noclock.conf

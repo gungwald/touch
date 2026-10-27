@@ -17,6 +17,19 @@ set, a partial pathname refers to BASIC.SYSTEM's default drive, as it does
 for BASIC.SYSTEM's own commands. Pressing RETURN on an empty line exits.
 MLI errors are reported by number and name, e.g. `ERROR $44 PATH NOT FOUND`.
 
+### Editing what you type
+
+Lines are read the way the Monitor's GETLN reads them, with one
+addition: the **Delete** key erases the character to the left of the
+cursor and closes up the gap, as the Delete key on a Mac does.
+
+- **Left arrow** moves back over the line and **right arrow** moves
+  forward again, as in GETLN. Text to the right of the cursor stays on
+  the screen and is dropped when you press RETURN.
+- **Ctrl-X** cancels the line and starts it again.
+- There is no ESC editing. Up and down arrows and other control keys are
+  ignored.
+
 ### Without a clock
 
 If ProDOS has no date, because there is no clock card and no date has
@@ -74,12 +87,16 @@ boots `touch.dsk` in LinApple with `linapple.conf`. That config puts
 LinApple's ThunderClock compatible clock card in slot 4. To try touch
 without a clock, change `Slot 4 = Clock Card` to `Slot 4 = None`.
 
+In LinApple, the PC keyboard's **Delete** key is the Apple II Delete key.
+**Backspace** is the Apple II left arrow.
+
 `test/run-test.sh` runs the tests automatically. It backdates `SAMPLE` to
 1990, then boots LinApple on a virtual X display (Xvfb). It types a
 series of touch commands with xdotool and saves screenshots to `test/out`.
 It lists the modification dates read from the disk image before and
 after (using `test/prodos_dates.py`). It then runs again with the clock
-card removed, to test entering the date.
+card removed, to test entering the date, and once more to test line
+editing in 40 and 80 columns.
 
 ### Why ProDOS 2.4.3
 

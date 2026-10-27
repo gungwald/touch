@@ -50,9 +50,9 @@ DEFSLT          = $BE3C         ; default slot
 DEFDRV          = $BE3D         ; default drive
 
 ; Monitor
-PROMPT          = $33           ; prompt character for GETLN
-INBUF           = $0200         ; GETLN input buffer
-GETLN           = $FD6A
+PROMPT          = $33           ; prompt character for get_line
+INBUF           = $0200         ; input buffer
+RDKEY           = $FD0C
 CROUT           = $FD8E
 PRBYTE          = $FDDA
 COUT            = $FDED
@@ -61,7 +61,16 @@ COUT            = $FDED
 PTR             = $06           ; free for user programs
 
 MAXPATH         = 64            ; longest ProDOS pathname
+MAXLINE         = 239           ; longest line get_line accepts
 CR              = $0D
+
+; Keys, as RDKEY returns them, and characters for COUT
+KEY_BELL        = $87
+KEY_LEFT        = $88           ; left arrow; backspace for COUT
+KEY_RETURN      = $8D
+KEY_RIGHT       = $95           ; right arrow
+KEY_CANCEL      = $98           ; Ctrl-X
+KEY_DELETE      = $FF
 
 ; Print the zero terminated string at addr
 .macro  PRINT   addr
@@ -179,17 +188,120 @@ get_info:
         rts
 
 ; Print the prompt at A (lo), Y (hi) and read a line into INBUF with
-; GETLN, which shows ':' as its own prompt character
+; get_line, which shows ':' as its own prompt character
 input:
         jsr     print
         lda     PROMPT
         pha
         lda     #':' | $80
         sta     PROMPT
-        jsr     GETLN
+        jsr     get_line
         pla
         sta     PROMPT
         rts
+
+; Read a line like the Monitor's GETLN: print the prompt character in
+; PROMPT, read keys into INBUF until RETURN, and return the length in X
+; with a RETURN stored after the line.
+;
+; As in GETLN, the left arrow moves back over the line and the right
+; arrow moves forward again, taking back the character it passes. The
+; characters to the right of the cursor stay on the screen and are
+; dropped if RETURN is pressed. Typing replaces them, and Ctrl-X cancels
+; the line. Unlike GETLN, Delete erases the character to the left of
+; the cursor and closes up the gap, as on a Mac, and there is no ESC
+; editing. Other control characters, including up and down arrows, are
+; ignored. Everything is printed through COUT, so it works in 40 or 80
+; columns.
+get_line:
+        lda     PROMPT
+        jsr     COUT
+        ldx     #0              ; X is the cursor position in the line
+        stx     line_len        ; line_len counts the characters to its
+@key:   jsr     RDKEY           ; right as well
+        cmp     #KEY_RETURN
+        beq     @return
+        cmp     #KEY_LEFT
+        beq     @left
+        cmp     #KEY_RIGHT
+        beq     @right
+        cmp     #KEY_DELETE
+        beq     @delete
+        cmp     #KEY_CANCEL
+        beq     @cancel
+        cmp     #' ' | $80
+        bcc     @key            ; other control characters
+        cpx     #MAXLINE
+        bcs     @full
+        sta     INBUF,x
+        jsr     COUT
+        inx
+        cpx     line_len
+        bcc     @key
+        stx     line_len
+        bcs     @key            ; always taken
+@full:  lda     #KEY_BELL
+        jsr     COUT
+        jmp     @key
+
+@cancel:
+        lda     #'\' | $80
+        jsr     COUT
+        jsr     CROUT
+        jmp     get_line
+
+@return:
+        stx     PTR             ; blank out anything right of the cursor
+        lda     line_len
+        sec
+        sbc     PTR
+        tay
+        beq     @end
+        lda     #' ' | $80
+@clear: jsr     COUT
+        dey
+        bne     @clear
+@end:   lda     #KEY_RETURN
+        sta     INBUF,x
+        jmp     COUT
+
+@left:  txa
+        beq     @key            ; already at the start
+        dex
+        lda     #KEY_LEFT
+        jsr     COUT
+        jmp     @key
+
+@right: cpx     line_len
+        bcs     @key            ; already at the end
+        lda     INBUF,x
+        jsr     COUT
+        inx
+        jmp     @key
+
+@delete:
+        txa
+        beq     @key            ; nothing to the left
+        dex
+        lda     #KEY_LEFT
+        jsr     COUT
+        stx     PTR             ; where the cursor goes back to
+@shift: inx                     ; move the rest of the line left one
+        cpx     line_len        ; place, printing it as it goes
+        bcs     @blank
+        lda     INBUF,x
+        sta     INBUF-1,x
+        jsr     COUT
+        jmp     @shift
+@blank: lda     #' ' | $80      ; blank out the old last character
+        jsr     COUT
+@back:  lda     #KEY_LEFT       ; back to the cursor position
+        jsr     COUT
+        dex
+        cpx     PTR
+        bne     @back
+        dec     line_len
+        jmp     @key
 
 ; Ask for the date until a valid one is entered, and put it in DATE and
 ; TIME on the global page, where ProDOS uses it from then on.
@@ -392,7 +504,7 @@ skip_spaces:
         bne     skip_spaces
 @done:  rts
 
-; Copy the line GETLN left in INBUF into path as a length-prefixed
+; Copy the line get_line left in INBUF into path as a length-prefixed
 ; ProDOS pathname. Leading spaces are skipped, the name ends at the
 ; first space or RETURN, and lowercase is folded to uppercase.
 ; Returns carry set if the name is too long.
@@ -671,6 +783,8 @@ month_buf:
         .res    3
 
 num:    .res    1               ; parse_num's result
+line_len:
+        .res    1               ; get_line's line length
 pos:    .res    1               ; saved input position
 
 ; Length-prefixed pathnames: as typed, and as given to the MLI
