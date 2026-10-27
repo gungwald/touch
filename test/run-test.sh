@@ -103,10 +103,10 @@ boot clock linapple.conf
 line "HOME" 1
 touch SAMPLE                    # partial pathname with no prefix set
 touch newfile                   # does not exist: created; lowercase folded
-touch /BOOT/TOUCH               # full pathname
+touch /TOUCH/TOUCH              # full pathname
 touch NO.SUCH.DIR/X             # error reporting
 touch ""                        # empty line: does nothing
-line "PREFIX /BOOT"
+line "PREFIX /TOUCH"
 touch NEWFILE                   # partial pathname with the prefix set
 shot 1-touch
 line "HOME" 1
@@ -185,10 +185,18 @@ finish editing
 
 # Creation dates. ProDOS 8 has no call to set one, so touch writes the
 # directory entry itself. Make files that fill the volume directory's
-# first block, so A1-A3 are in its second, and files in subdirectories.
+# first block (12 entries after its header), so A1-A3 are in its second,
+# and files in subdirectories.
 SETUP=$OUT/setup-src.dsk
 cp "$DISK" $SETUP
-for f in F1 F2 F3 F4 F5 F6 F7 A1 A2 A3; do
+for f in F1 F2 F3 F4 F5; do
+    printf '' | java -jar AppleCommander-ac-1.4.0.jar -p $SETUP $f TXT
+done
+if [ "$($DATES $SETUP | tail -n +2 | wc -l)" != 12 ]; then
+    echo "the volume directory's first block is not full" >&2
+    exit 1
+fi
+for f in A1 A2 A3; do
     printf '' | java -jar AppleCommander-ac-1.4.0.jar -p $SETUP $f TXT
 done
 boot create-setup linapple.conf $SETUP
@@ -223,16 +231,16 @@ line "HOME" 1
 touch SUB/INNER                 # in a subdirectory
 keys N
 wait_disk
-touch /BOOT/SUB/DEEP/FILE       # two levels down, full pathname
+touch /TOUCH/SUB/DEEP/FILE      # two levels down, full pathname
 keys E
 line "4-JUL-76"
 wait_disk
-line "PREFIX /BOOT/SUB"         # TOUCH is not in /BOOT/SUB, so give its
-line "-/BOOT/TOUCH"             # full pathname
+line "PREFIX /TOUCH/SUB"        # TOUCH is not in /TOUCH/SUB, so give
+line "-/TOUCH/TOUCH"            # its full pathname
 line "DEEP/FILE2"               # partial pathname with a prefix
 keys N
 wait_disk
-line "-/BOOT/TOUCH"
+line "-/TOUCH/TOUCH"
 line "DEEP/FILE"                # has a creation date now: no question
 shot 11-create-subdirs
 finish create

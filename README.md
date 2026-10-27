@@ -95,16 +95,24 @@ CREATION DATE SET TO 27-OCT-26 01:54
 
 ## Building
 
-Requires GNU make, cc65 (`dnf install cc65`), and Java for the included
-AppleCommander.
+Requires GNU make, cc65 (`dnf install cc65`), Java for the included
+AppleCommander, and Python 3.
 
 ```
 make          # builds touch and touch.dsk
 make cat      # lists the files on touch.dsk
 ```
 
-`touch.dsk` is a bootable ProDOS 2.4.3 disk holding `TOUCH` (BIN, $2000)
-and a small `SAMPLE` text file to try it on.
+`touch.dsk` is a bootable ProDOS 2.4.3 disk named `/TOUCH`. It holds
+`TOUCH` (BIN, $2000) and two small text files to try it on. `SAMPLE` is
+an ordinary file. `NO.CREATE.DATE` has no creation date, so touching it
+asks about setting one. The build clears that date with
+`test/prodos_dates.py`.
+
+The disk also has `ONLINE`, from
+[online](https://github.com/gungwald/online) v1.0.2, for you to run if
+you want to. `-ONLINE` lists the volumes that are online, with their
+slots and drives. A copy of it is in `extras/ONLINE`.
 
 ## Testing in LinApple
 

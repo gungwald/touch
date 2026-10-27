@@ -10,6 +10,10 @@
 #    Java and AppleCommander (included)
 #        - To create the Apple II disk image
 #
+#    Python 3
+#        - To clear the creation date of NO.CREATE.DATE on the disk
+#          (with test/prodos_dates.py)
+#
 #    LinApple
 #        - To load the disk and test the program
 #          https://github.com/linappleii/linapple
@@ -25,15 +29,24 @@ SRC=$(PGM).s
 CFG=$(PGM).cfg
 BASE_DSK=prodos-2.4.3-boot.dsk
 DSK=$(PGM).dsk
+VOL=TOUCH
 
 all: $(DSK)
 
-# Copy an existing boot disk so the boot blocks are in place, then add
-# the program and a small text file to try it on.
-$(DSK): $(PGM) $(BASE_DSK)
+# Copy an existing boot disk so the boot blocks are in place, name the
+# volume /TOUCH, then add the program and small text files to try it on.
+# NO.CREATE.DATE has its creation date cleared, to try setting one.
+# ONLINE, from https://github.com/gungwald/online v1.0.2, is included for
+# the user to run if they want to (-ONLINE lists the online volumes).
+$(DSK): $(PGM) $(BASE_DSK) test/prodos_dates.py extras/ONLINE
 	cp $(BASE_DSK) $(DSK)
+	$(AC) -n $(DSK) $(VOL)
 	$(AC) -p $(DSK) TOUCH BIN 0x2000 < $(PGM)
 	printf 'HELLO\r' | $(AC) -p $(DSK) SAMPLE TXT
+	printf 'THIS FILE HAS NO CREATION DATE\r' | \
+	    $(AC) -p $(DSK) NO.CREATE.DATE TXT
+	python3 test/prodos_dates.py $(DSK) NO.CREATE.DATE create none
+	$(AC) -p $(DSK) ONLINE BIN 0x2000 < extras/ONLINE
 
 $(PGM): $(PGM).o $(CFG)
 	$(LD65) -C $(CFG) -m $(PGM).map -o $@ $(PGM).o

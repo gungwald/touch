@@ -4,3 +4,4 @@ touch
 *.map
 touch.dsk
 test/out/
+__pycache__/
